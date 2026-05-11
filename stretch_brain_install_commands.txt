@@ -1,0 +1,7 @@
+conda create -n stretch_brain python=3.10 -y
+conda activate stretch_brain
+
+conda install -c conda-forge ffmpeg portaudio pyaudio -y
+
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install -r stretch_brain_requirements.txt
