@@ -2,44 +2,37 @@
 set -euo pipefail
 
 # ============================================================
-# Stretch AI WSL Environment Setup Script
+# Stretch AI WSL setup script
 #
 # Purpose:
-# This script builds the local WSL runtime used by the
-# Windows voice interaction system (voice_master_v2.py).
+# Build a clean WSL Ubuntu runtime for the Stretch voice-control
+# project. This environment is called by the Windows-side
+# voice_master_v2.py program during robot execution.
 #
-# Design philosophy:
+# Overall system design:
+#   Windows:
+#     microphone input, Whisper transcription, hotkeys,
+#     LLM intent parsing
 #
-# Instead of running heavy speech interaction and AI logic
-# directly on the robot, the project separates computation:
+#   WSL Ubuntu:
+#     Stretch AI client logic, grasp pipeline, teleoperation
+#     command dispatch
 #
-# Windows
-#   -> microphone input
-#   -> Whisper speech transcription
-#   -> LLM intent parsing
+#   Stretch Robot:
+#     ROS2/ZMQ bridge and physical robot execution
 #
-# WSL Ubuntu
-#   -> Stretch AI client logic
-#   -> grasp / teleoperation commands
+# This split keeps the robot lightweight and avoids putting
+# speech recognition or LLM logic directly on the robot.
 #
-# Stretch Robot
-#   -> ROS2 bridge and physical execution
-#
-# This architecture keeps the robot lightweight and reduces
-# installation complexity on the robot itself.
-#
-# Expected final structure:
-#
+# Creates:
 #   ~/stretch_ai
 #   ~/stretch_ai/venv
 #
 # IMPORTANT:
+# This script only installs the runtime environment.
 #
-# This script only builds the runtime environment.
-#
-# The customized project behavior is implemented separately.
-#
-# After setup, manually replace:
+# After installation, manually replace the following customized
+# project files:
 #
 #   ~/stretch_ai/task2_client.py
 #   ~/stretch_ai/src/stretch/perception/encoders/siglip_encoder.py
@@ -47,75 +40,34 @@ set -euo pipefail
 #   ~/stretch_ai/src/stretch/agent/robot_agent_dynamem.py
 #
 # Reason:
+# The original Stretch AI repository provides the baseline
+# framework. These replacement files contain the project-specific
+# behavior used for voice control, grasp execution, perception
+# encoding, and robot-agent logic.
 #
-# The original StretchAI repository provides the baseline
-# framework only.
-#
-# Project-specific behavior was implemented by modifying
-# several files during development.
-#
-# Separating environment setup from behavioral customization
-# makes future updates easier and avoids editing installation
-# scripts repeatedly.
+# Keeping setup and customized behavior separate makes the
+# installation easier to reproduce and easier to update later.
 # ============================================================
-
 
 REPO_DIR="$HOME/stretch_ai"
 
-# Directory containing this script
-#
-# This allows requirement files to remain relative to the
-# script location rather than relying on absolute paths.
-#
-# Avoids:
-#
-# /home/username/...
-#
-# which often causes reproducibility issues across users.
-
+# Directory containing this script.
+# Used so requirement files can be loaded relative to this script
+# instead of using hardcoded user-specific paths such as /home/xxx.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-
-
-# Requirement file with pinned versions
-#
-# Package versions changed frequently during debugging.
-#
-# Final versions were pinned after resolving dependency
-# conflicts and runtime issues.
-
+# Pinned runtime requirements for the WSL environment.
+# These versions were separated into a file so future users can
+# inspect or update dependencies without editing this setup script.
 REQ_FILE="$SCRIPT_DIR/wsl_venv_requirements.txt"
 
 
+echo "[1/8] Installing Ubuntu dependencies..."
 
-echo "[1/8] Installing Ubuntu system packages..."
-
-
-# ------------------------------------------------------------
-# Install Ubuntu dependencies
-#
-# Categories:
-#
-# git:
-#     repository + submodules
-#
-# audio:
-#     microphone and speech libraries
-#
-# ffmpeg:
-#     media processing
-#
-# python:
-#     venv and package support
-#
-# visualization:
-#     OpenCV / GUI dependencies
-#
-# Some packages may appear unrelated to the final workflow
-# but were included to avoid common runtime failures seen
-# during earlier deployment attempts.
-# ------------------------------------------------------------
-
+# Install system-level dependencies needed by Stretch AI, Python,
+# audio libraries, OpenCV/visualization tools, and basic network tests.
+# Some packages are included to prevent common missing-library errors
+# during later runtime, not because they are directly called here.
 sudo apt update
 
 sudo apt install -y \
@@ -125,187 +77,146 @@ sudo apt install -y \
   iputils-ping espeak libxkbcommon-x11-0
 
 
-
 echo "[2/8] Cloning or updating Stretch AI..."
 
-
-# ------------------------------------------------------------
-# Clone repository once
-#
-# Future runs update instead of recloning.
-#
-# Recursive clone required because StretchAI relies on
-# multiple submodules.
-#
-# Missing submodules often caused partial installations.
-# ------------------------------------------------------------
-
+# Clone the Stretch AI repository if it does not already exist.
+# If it already exists, update it and make sure submodules are present.
+# Recursive submodules are important because an incomplete clone can
+# lead to missing-package or missing-source errors later.
 if [ ! -d "$REPO_DIR/.git" ]; then
-
-  git clone \
-  https://github.com/hello-robot/stretch_ai.git \
-  --recursive "$REPO_DIR"
-
+  git clone https://github.com/hello-robot/stretch_ai.git --recursive "$REPO_DIR"
 else
-
   cd "$REPO_DIR"
-
   git pull
-
   git submodule update --init --recursive
-
 fi
-
 
 
 cd "$REPO_DIR"
 
-
-
 echo "[3/8] Creating Python venv..."
 
-
-# ------------------------------------------------------------
-# Create isolated environment
-#
-# Earlier testing showed package conflicts between:
-#
-# system python
-# conda
-# StretchAI
-#
-# Using a dedicated venv minimizes environment drift.
-# ------------------------------------------------------------
-
+# Create a dedicated Python virtual environment for this project.
+# This avoids conflicts with system Python, Conda environments, or
+# packages installed for other robot projects.
 python3 -m venv venv
-
 source "$REPO_DIR/venv/bin/activate"
 
 
+echo "[4/8] Updating pip..."
 
-echo "[4/8] Upgrading pip tools..."
-
-
-# Upgrade package tools first
-#
-# Older pip versions occasionally produced dependency
-# resolution issues.
-
+# Upgrade packaging tools before installing large dependencies.
+# This reduces avoidable installation and dependency-resolution issues.
 python -m pip install --upgrade pip setuptools wheel
 
 
+echo "[5/8] Installing PyTorch..."
 
-echo "[5/8] Installing PyTorch CUDA..."
-
-
-# CUDA 11.8 build
-#
-# Selected because it matched the Windows development setup
-# and RTX 3060 testing environment.
-
+# Install the CUDA 11.8 PyTorch build used by this deployment path.
+# Keeping this step explicit makes the GPU-related dependency choice clear.
 pip install torch torchvision torchaudio \
 --index-url https://download.pytorch.org/whl/cu118
 
 
-
 echo "[6/8] Installing Stretch AI..."
 
-
-# Editable installation:
-#
-# allows source modifications to take effect immediately
-#
-# avoids reinstalling after every code update
-
+# Install Stretch AI in editable mode.
+# Editable installation is useful because the project replaces/modifies
+# several source files after setup, and changes should take effect without
+# reinstalling the package each time.
 cd "$REPO_DIR/src"
-
 pip install -e ".[dev]"
 
 
+echo "[7/8] Installing project requirements..."
 
-echo "[7/8] Installing runtime requirements..."
-
-
-# Install final pinned package versions
-
+# Install project-specific pinned Python packages.
+# These requirements capture the final working versions after debugging.
 pip install -r "$REQ_FILE"
 
 
+echo "[7.5/8] Fixing boost dependency..."
 
-echo "[7.5/8] Applying dependency compatibility fix..."
-
-
-# ------------------------------------------------------------
-# Compatibility patch
-#
-# Certain package combinations generated runtime issues.
-#
-# Earlier testing showed cmeel-boost version mismatches.
-#
-# Fixed version retained for reproducibility.
-# ------------------------------------------------------------
-
+# Compatibility override for boost-related dependency issues observed
+# during setup. The --no-deps flag avoids pulling additional dependency
+# changes after the main environment has already been pinned.
 pip install cmeel-boost==1.89.0 --no-deps
-
 
 
 echo "[7.6/8] Applying rerun patch..."
 
-
-# ------------------------------------------------------------
-# Visualization patch
+# Patch a Rerun visualization issue where theta may appear as a tensor-like
+# object instead of a plain scalar. This can break visualization even when
+# the robot pipeline itself is otherwise working.
 #
-# Earlier Rerun visualization occasionally failed when
-# theta values arrived as tensors instead of scalars.
-#
-# Patch converts tensor-like values safely.
-#
-# This issue does not always appear but keeping the patch
-# avoids repeated debugging later.
-# ------------------------------------------------------------
-
+# The patch is safe to rerun:
+#   - if the file already contains the fixed form, nothing changes
+#   - if the file is missing, setup continues and reports it
 python - <<'PY'
-...
+from pathlib import Path
+
+p = Path.home() / "stretch_ai/src/stretch/visualization/rerun.py"
+
+if p.exists():
+
+    s=p.read_text()
+
+    s2=s
+
+    s2=s2.replace(
+        "radians=float(theta),",
+        "radians=float(theta.item() if hasattr(theta,'item') else theta),"
+    )
+
+    s2=s2.replace(
+        "radians=theta,",
+        "radians=float(theta.item() if hasattr(theta,'item') else theta),"
+    )
+
+    if s2!=s:
+        p.write_text(s2)
+        print("Patch applied")
+
+    else:
+        print("Patch already exists")
+
+else:
+    print("rerun.py not found")
 PY
 
 
+echo "[8/8] Running smoke test..."
 
-echo "[8/8] Smoke testing..."
+cd "$REPO_DIR"
 
-
-# ------------------------------------------------------------
-# Final validation
-#
-# Import test verifies:
-#
-# numpy
-# torch
-# rerun
-# opencv
-# transformers
-# StretchAI
-#
-# Goal:
-#
-# detect environment failures immediately rather than during
-# robot execution.
-# ------------------------------------------------------------
-
+# Import smoke test.
+# This catches broken installs before running robot commands.
+# It checks the main packages used by the WSL-side Stretch AI runtime.
 python - <<'PY'
-...
+import numpy
+import torch
+import rerun
+import cv2
+import transformers
+import stretch
+
+print("OK: Stretch AI imports passed")
+print("numpy:",numpy.__version__)
+print("torch:",torch.__version__,"cuda:",torch.cuda.is_available())
+print("opencv:",cv2.__version__)
+print("transformers:",transformers.__version__)
 PY
 
 
-
 echo
-echo "Setup finished."
+echo "Done."
 echo
 
-echo "Next step:"
+echo "Activate:"
 echo "source ~/stretch_ai/venv/bin/activate"
 
 echo
-echo "Smoke test:"
+echo "Test:"
 
 echo "cd ~/stretch_ai/src"
 
