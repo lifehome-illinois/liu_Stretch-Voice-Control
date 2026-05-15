@@ -72,6 +72,14 @@ python -m stretch.app.grasp_object --target_object "pink bottle" --robot_ip 172.
 ```
 
 ## 3. Windows Side
+### Configure API Key
+
+Open `voice_master_v2.py` and replace the placeholder API key with your own key.
+
+Example:
+
+```python
+OPENAI_API_KEY="your_api_key_here"
 
 Create the Conda environment:
 
